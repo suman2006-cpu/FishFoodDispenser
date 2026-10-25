@@ -11,15 +11,6 @@ export const SENSOR_CARDS = [
     format: (value) => Number.isFinite(Number(value)) ? Number(value).toFixed(1) : '—',
   },
   {
-    id: 'ph',
-    label: 'Water pH',
-    field: 'ph',
-    unit: 'pH',
-    icon: '🧪',
-    description: 'Current pH reading',
-    format: (value) => Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '—',
-  },
-  {
     id: 'food-weight',
     label: 'Food weight',
     field: 'foodWeightG',

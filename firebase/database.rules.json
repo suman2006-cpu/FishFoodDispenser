@@ -32,6 +32,14 @@
             }
           }
         },
+        "schedules": {
+          "requests": {
+            ".read": "auth != null && (auth.uid === 'DvsKicje5pTkRaOTETVXERLCmuj1' || auth.uid === '315vftd0wOgeDVw73uZr2KhtXFT2')",
+            "$scheduleId": {
+              ".write": "auth != null && (auth.uid === 'DvsKicje5pTkRaOTETVXERLCmuj1' || auth.uid === '315vftd0wOgeDVw73uZr2KhtXFT2')"
+            }
+          }
+        },
         "history": {
           "readings": {
             ".read": "auth != null && auth.uid === 'DvsKicje5pTkRaOTETVXERLCmuj1'",

@@ -1,6 +1,6 @@
 # FinPilot — Smart Fish Feeding Dispenser Dashboard
 
-A React + Vite starter for a worldwide-accessible ESP32 fish-feeder dashboard using Firebase Realtime Database. The dashboard includes owner sign-in, four configurable readings (temperature, pH, RTC time, load-cell food weight), device heartbeat status, the reported LCD/OLED message, a remote dispense command request, command acknowledgement, and recent feeding-event history.
+A React + Vite dashboard for an ESP32 fish feeder using Firebase Realtime Database. It includes owner sign-in, temperature, RTC time and load-cell food weight readings, device heartbeat status, the reported LCD/OLED message, manual dispense requests, scheduled dispense requests, command acknowledgements and recent feeding-event history. No pH sensor is assumed.
 
 **Important:** This is the prepared web/cloud scaffold. It is not connected to your real hardware until you configure Firebase and integrate the cloud adapter into your existing ESP32 sketch. No demo readings are shown as real data.
 
@@ -55,7 +55,6 @@ All paths below are relative to the database root:
 ```text
 devices/feeder-01/telemetry/latest
   temperatureC: number
-  ph: number
   foodWeightG: number
   rtcTime: string
   feederState: "idle" | "dispensing" | "error" | ...
@@ -81,13 +80,19 @@ devices/feeder-01/commands/latestResult
 devices/feeder-01/commands/results/<commandId>
   same acknowledgement structure (durable, used for duplicate protection)
 
+devices/feeder-01/schedules/requests/<scheduleId>
+  scheduleId, action: "DISPENSE", status: "pending", scheduledAt: Unix epoch milliseconds,
+  targetWeightG, createdAt, createdBy
+
 devices/feeder-01/history/readings/<pushId>
-  temperatureC, ph, foodWeightG, recordedAt (Firebase server timestamp)
+  temperatureC, foodWeightG, recordedAt (Firebase server timestamp)
 devices/feeder-01/history/feedingEvents/<pushId>
   status, source, foodWeightG, completedAt (Firebase server timestamp)
 ```
 
 `rtcTime` is the device's RTC reading; `updatedAt` / `lastSeen` should reflect server time so an incorrect RTC does not make an offline device appear online. The dashboard uses a 30-second default timeout, editable with `VITE_OFFLINE_TIMEOUT_MS`.
+
+Scheduled feeds are written to `schedules/requests` with a Unix timestamp and requested gram amount. The ESP32 must poll, validate, and execute those requests using the existing calibrated dispenser logic; it must refuse to dispense when a fresh hopper reading is 10 g or less. There is no `.ino` in this project, so physical scheduling and dose accuracy require completing the firmware integration described in `firmware/INTEGRATION_PLAN.md`.
 
 ## D. Link real ESP32 readings
 

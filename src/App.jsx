@@ -51,6 +51,11 @@ function Dashboard({ user }) {
   const [latestResult, setLatestResult] = useState(null);
   const [feedingEvents, setFeedingEvents] = useState([]);
   const [readingHistory, setReadingHistory] = useState([]);
+  const [schedules, setSchedules] = useState([]);
+  const [scheduleTime, setScheduleTime] = useState('');
+  const [scheduleWeight, setScheduleWeight] = useState('');
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+  const [scheduleNotice, setScheduleNotice] = useState('');
   const [dataError, setDataError] = useState('');
   const [commandBusy, setCommandBusy] = useState(false);
   const [commandNotice, setCommandNotice] = useState('');
@@ -84,8 +89,15 @@ function Dashboard({ user }) {
       const readings = value && typeof value === 'object'
         ? Object.entries(value).map(([id, reading]) => ({ id, ...reading }))
         : [];
-      readings.sort((a, b) => Number(a.recordedAt || a.updatedAt || 0) - Number(b.recordedAt || b.updatedAt || 0));
-      setReadingHistory(readings.slice(-24));
+      const realReadings = readings.filter((reading) => Number.isFinite(Number(reading.recordedAt ?? reading.updatedAt)) && Number(reading.recordedAt ?? reading.updatedAt) > 0);
+      realReadings.sort((a, b) => Number(a.recordedAt ?? a.updatedAt) - Number(b.recordedAt ?? b.updatedAt));
+      setReadingHistory(realReadings.slice(-24));
+    }, onError));
+    cleanups.push(onValue(ref(db, `${DEVICE_PATH}/schedules/requests`), (snapshot) => {
+      const value = snapshot.val();
+      const items = value && typeof value === 'object' ? Object.entries(value).map(([id, item]) => ({ id, ...item })) : [];
+      items.sort((a, b) => Number(a.scheduledAt || 0) - Number(b.scheduledAt || 0));
+      setSchedules(items);
     }, onError));
     cleanups.push(onValue(ref(db, `${DEVICE_PATH}/history/feedingEvents`), (snapshot) => {
       const value = snapshot.val();
@@ -113,6 +125,11 @@ function Dashboard({ user }) {
 
   const feedNow = useCallback(async () => {
     if (!db || !user || !online) return;
+    const stockWeight = Number(telemetry?.foodWeightG);
+    if (Number.isFinite(stockWeight) && stockWeight <= 10) {
+      setCommandNotice('Food is low (10 g or less). Fill the dispenser before feeding.');
+      return;
+    }
     if (String(telemetry?.feederState || '').toLowerCase() === 'dispensing') {
       setCommandNotice('A dispensing operation is already reported as active.');
       return;
@@ -138,7 +155,51 @@ function Dashboard({ user }) {
     } finally {
       setCommandBusy(false);
     }
-  }, [user, online, telemetry?.feederState]);
+  }, [user, online, telemetry?.feederState, telemetry?.foodWeightG]);
+
+  async function saveSchedule(event) {
+    event.preventDefault();
+    const scheduledAt = new Date(scheduleTime).getTime();
+    const targetWeightG = Number(scheduleWeight);
+    if (!Number.isFinite(scheduledAt) || scheduledAt <= correctedNow) {
+      setScheduleNotice('Choose a future date and time.');
+      return;
+    }
+    if (!Number.isFinite(targetWeightG) || targetWeightG <= 0) {
+      setScheduleNotice('Enter a dispense amount greater than 0 g.');
+      return;
+    }
+    setScheduleBusy(true);
+    setScheduleNotice('');
+    try {
+      const scheduleRef = push(ref(db, `${DEVICE_PATH}/schedules/requests`));
+      await set(scheduleRef, {
+        scheduleId: scheduleRef.key,
+        action: 'DISPENSE',
+        status: 'pending',
+        scheduledAt,
+        targetWeightG,
+        createdAt: serverTimestamp(),
+        createdBy: user.uid,
+      });
+      setScheduleTime('');
+      setScheduleWeight('');
+      setScheduleNotice('Schedule saved. The ESP32 must be online at the scheduled time to dispense.');
+    } catch (error) {
+      setScheduleNotice(`Could not save schedule: ${error?.message || 'check Firebase rules and connectivity'}`);
+    } finally {
+      setScheduleBusy(false);
+    }
+  }
+
+  async function cancelSchedule(schedule) {
+    try {
+      await set(ref(db, `${DEVICE_PATH}/schedules/requests/${schedule.id}/status`), 'cancelled');
+      setScheduleNotice('Schedule cancelled.');
+    } catch (error) {
+      setScheduleNotice(`Could not cancel schedule: ${error?.message || 'check Firebase rules'}`);
+    }
+  }
 
   const resultTime = useMemo(() => {
     if (!latestResult?.completedAt) return '';
@@ -182,10 +243,9 @@ function Dashboard({ user }) {
           <div className="section-heading"><div><p className="eyebrow">SENSOR HISTORY</p><h2>Recent trends</h2></div><span className="history-count">Up to 24 samples per chart</span></div>
           <div className="trend-grid">
             <TrendCard title="Temperature" field="temperatureC" unit="°C" samples={readingHistory} digits={1} />
-            <TrendCard title="Water pH" field="ph" unit="pH" samples={readingHistory} digits={2} />
             <TrendCard title="Food weight" field="foodWeightG" unit="g" samples={readingHistory} digits={1} />
           </div>
-          <p className="data-footnote">Charts remain empty until firmware writes timestamped records to <code>history/readings</code>. No demonstration data is generated.</p>
+          <p className="data-footnote">Charts use only timestamped ESP32 records from <code>history/readings</code>. Each chart appears once real samples for that measurement are available; no demonstration data is generated.</p>
         </section>
 
         <section className="content-grid section-block">
@@ -196,6 +256,7 @@ function Dashboard({ user }) {
             <button className="primary-button dispense-button" onClick={feedNow} disabled={!online || commandBusy || String(telemetry?.feederState || '').toLowerCase() === 'dispensing'}>
               {commandBusy ? 'Sending command…' : String(telemetry?.feederState || '').toLowerCase() === 'dispensing' ? 'Dispensing in progress' : '🐟  Dispense food now'}
             </button>
+            {Number.isFinite(Number(telemetry?.foodWeightG)) && Number(telemetry.foodWeightG) <= 10 && <p className="stock-warning" role="alert">⚠ Food quantity is low ({Number(telemetry.foodWeightG).toFixed(1)} g). Fill the food dispenser before dispensing.</p>}
             {!online && <p className="disabled-note">Remote feeding is disabled until the ESP32 reports a recent heartbeat.</p>}
             {commandNotice && <p className="command-notice" role="status">{commandNotice}</p>}
             {latestResult && <div className="latest-result"><span className="small-label">LATEST DEVICE ACKNOWLEDGEMENT</span><strong>{latestResult.status || 'Received'}</strong><span>{latestResult.message || latestResult.detail || 'The ESP32 reported a command result.'}</span>{resultTime && <small>{resultTime}</small>}</div>}
@@ -209,6 +270,23 @@ function Dashboard({ user }) {
             <div className="health-detail"><span>RTC time from hardware</span><strong>{telemetry?.rtcTime || 'Not received'}</strong></div>
             <div className="health-note"><span>ⓘ</span><p>The connection badge is based on heartbeat age, not just whether this browser can access Firebase.</p></div>
           </article>
+        </section>
+
+        <section className="section-block schedule-section">
+          <div className="section-heading"><div><p className="eyebrow">AUTOMATED FEEDING</p><h2>Schedule a dispense</h2></div><span className="history-count">Uses your device’s local time</span></div>
+          <div className="panel schedule-panel">
+            <form className="schedule-form" onSubmit={saveSchedule}>
+              <label>Dispense date and time<input type="datetime-local" value={scheduleTime} min={new Date(now - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)} onChange={(event) => setScheduleTime(event.target.value)} required /></label>
+              <label>Food amount (g)<input type="number" min="0.1" step="0.1" value={scheduleWeight} onChange={(event) => setScheduleWeight(event.target.value)} placeholder="e.g. 5" required /></label>
+              <button className="primary-button" type="submit" disabled={!online || scheduleBusy}>{scheduleBusy ? 'Saving…' : 'Save schedule'}</button>
+            </form>
+            {!online && <p className="disabled-note">Scheduling requires a live connection to save the request. The ESP32 also needs to be online at dispense time.</p>}
+            {scheduleNotice && <p className="command-notice" role="status">{scheduleNotice}</p>}
+            <div className="schedule-list">
+              <h3>Scheduled feeds</h3>
+              {schedules.filter((item) => ['pending', 'scheduled'].includes(String(item.status || '').toLowerCase())).length ? schedules.filter((item) => ['pending', 'scheduled'].includes(String(item.status || '').toLowerCase())).map((item) => <div className="schedule-row" key={item.id}><div><strong>{new Date(Number(item.scheduledAt)).toLocaleString()}</strong><span>{item.targetWeightG} g · {item.status || 'pending'}</span></div><button className="quiet-button" type="button" onClick={() => cancelSchedule(item)}>Cancel</button></div>) : <p className="empty-schedules">No upcoming feeds scheduled.</p>}
+            </div>
+          </div>
         </section>
 
         <section className="section-block history-section">

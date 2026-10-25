@@ -7,6 +7,7 @@ The frontend expects the ESP32 to write the following paths for device ID `feede
 - `devices/feeder-01/commands/requests/<commandId>`: commands the owner website has queued; the ESP32 reads and validates these
 - `devices/feeder-01/commands/latestResult`: most recent command acknowledgement (the website listens here)
 - `devices/feeder-01/commands/results/<commandId>`: durable per-command result used to prevent reprocessing after reconnection/reboot
+- `devices/feeder-01/schedules/requests/<scheduleId>`: owner-created timed feeding request; the ESP32 must poll this path and execute due requests
 - `devices/feeder-01/history/readings/<pushId>`: optional periodic history samples (the website uses these for trend charts)
 - `devices/feeder-01/history/feedingEvents/<pushId>`: completed/failed feeding event log
 
@@ -15,7 +16,6 @@ The frontend expects the ESP32 to write the following paths for device ID `feede
 ```json
 {
   "temperatureC": 27.4,
-  "ph": 7.05,
   "foodWeightG": 182.6,
   "rtcTime": "2026-10-21 09:30:00",
   "feederState": "idle",
@@ -44,6 +44,26 @@ Authentication setup must be tested against the exact installed library version 
 6. Write a feeding event to `history/feedingEvents/<pushId>` when the operation finishes or fails.
 7. If Wi-Fi/cloud service is down, local operations should continue if the existing firmware permits; remote commands cannot arrive until connectivity is restored.
 
+## Timed feeding request contract
+
+The dashboard writes a request like this to `schedules/requests/<scheduleId>`:
+
+```json
+{
+  "scheduleId": "Firebase push ID",
+  "action": "DISPENSE",
+  "status": "pending",
+  "scheduledAt": 1792555800000,
+  "targetWeightG": 5,
+  "createdAt": 1792550000000,
+  "createdBy": "owner UID"
+}
+```
+
+`scheduledAt` is a Unix epoch timestamp in milliseconds (the browser converts the selected local time to this value). On each scheduler pass, the ESP32 must load pending requests, compare due times against a trustworthy clock (NTP or a server-synchronized time source), and process each due schedule at most once. Persist the processed schedule ID/result so a restart or Firebase reconnect cannot dispense it twice. Respect a dashboard `cancelled` status before starting. Update status to `processing` before operating, then `completed` or `failed` with a message and completion timestamp. A missed schedule while offline should be handled once after reconnect, or marked failed/expired according to the product policy; do not fire every missed schedule as a burst.
+
+Before any scheduled or remote dispense, read a fresh load-cell measurement. If the hopper has 10 g or less, do not run the motor; mark the request failed with a low-food message. `targetWeightG` is the requested amount to dispense, not the hopper's remaining quantity. The existing hardware dispense routine must use its calibrated gram-to-motor logic and stop/verify against that target. That calibration and the `.ino` are not included in this repository, so the web form can store a requested amount but cannot establish accurate physical dosing on its own. Preserve the local manual control and apply the same sensor, max-run-time, and duplicate-command safety checks to scheduled operations.
+
 ## Why this isn't a ready-to-flash .ino yet
 
-The existing sketch's pin mappings, temperature sensor model, pH calibration formula, RTC library, load-cell scale factor, display type, and dispenser driver are not known yet. Replacing these with guessed code could break the hardware. The next integration step is to review the actual existing `.ino` and merge this cloud adapter around its real sensor and dispenser functions.
+The existing sketch's pin mappings, temperature sensor model, RTC library, load-cell scale factor, display type, and dispenser driver are not known yet. Replacing these with guessed code could break the hardware. The next integration step is to review the actual existing `.ino` and merge this cloud adapter around its real sensor and dispenser functions.
